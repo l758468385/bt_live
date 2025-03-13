@@ -318,7 +318,76 @@ app.get('/api/torrent-info', (req, res) => {
   }
 });
 
-// 流式传输选定的文件
+const PIECE_LENGTH = 1024 * 1024; // 1MB per piece
+const PRELOAD_SIZE = 10 * PIECE_LENGTH; // 10MB preload
+const INITIAL_PIECES = 5; // Number of initial pieces to prioritize
+
+// 添加缓存管理器
+class StreamCache {
+  constructor(maxSize = 100 * 1024 * 1024) {
+    this.cache = new Map();
+    this.maxSize = maxSize;
+    this.currentSize = 0;
+  }
+
+  set(key, data) {
+    while (this.currentSize + data.length > this.maxSize) {
+      const oldestKey = this.cache.keys().next().value;
+      const oldData = this.cache.get(oldestKey);
+      this.currentSize -= oldData.length;
+      this.cache.delete(oldestKey);
+    }
+
+    this.cache.set(key, data);
+    this.currentSize += data.length;
+  }
+
+  get(key) {
+    return this.cache.get(key);
+  }
+}
+
+const streamCache = new StreamCache();
+
+// 优化分片优先级
+function prioritizeInitialPieces(engine, file) {
+  const pieceLength = engine.torrent.pieceLength;
+  const fileOffset = file.offset;
+  const startPiece = Math.floor(fileOffset / pieceLength);
+  
+  // 设置前几个分片的优先级最高
+  for (let i = 0; i < INITIAL_PIECES; i++) {
+    const pieceIndex = startPiece + i;
+    if (pieceIndex < engine.torrent.pieces.length) {
+      engine.select(pieceIndex, pieceIndex + 1, 1);
+    }
+  }
+}
+
+// 创建带预加载的流
+function createStreamWithPreload(file, range, engine) {
+  const stream = file.createReadStream({
+    start: range.start,
+    end: range.end
+  });
+
+  // 预加载下一段数据
+  const nextStart = range.end + 1;
+  const nextEnd = Math.min(nextStart + PRELOAD_SIZE, file.length - 1);
+  
+  if (nextEnd > nextStart) {
+    const startPiece = Math.floor(nextStart / engine.torrent.pieceLength);
+    const endPiece = Math.floor(nextEnd / engine.torrent.pieceLength);
+    
+    for (let i = startPiece; i <= endPiece; i++) {
+      engine.select(i, i + 1, 1);
+    }
+  }
+
+  return stream;
+}
+
+// 修改流式传输处理
 app.get('/api/stream/:infoHash/:fileIndex', (req, res) => {
   const { infoHash, fileIndex } = req.params;
   const fileIndexNum = parseInt(fileIndex, 10);
@@ -335,13 +404,17 @@ app.get('/api/stream/:infoHash/:fileIndex', (req, res) => {
   
   const file = engine.files[fileIndexNum];
   const fileSize = file.length;
+
+  // 初始化文件的优先级
+  prioritizeInitialPieces(engine, file);
   
   // 解析范围请求头
   const rangeHeader = req.headers.range;
   let range;
   
   if (rangeHeader) {
-    range = rangeParser(fileSize, rangeHeader)[0];
+    const ranges = rangeParser(fileSize, rangeHeader);
+    range = ranges[0];
   }
   
   if (!range) {
@@ -349,11 +422,10 @@ app.get('/api/stream/:infoHash/:fileIndex', (req, res) => {
     res.setHeader('Content-Length', fileSize);
     res.setHeader('Content-Type', getContentType(file.name));
     
-    // 创建可读流
-    const stream = file.createReadStream();
+    // 创建可读流（带预加载）
+    const stream = createStreamWithPreload(file, { start: 0, end: fileSize - 1 }, engine);
     stream.pipe(res);
     
-    // 处理流错误
     stream.on('error', (err) => {
       console.error('流错误:', err);
       if (!res.headersSent) {
@@ -370,11 +442,28 @@ app.get('/api/stream/:infoHash/:fileIndex', (req, res) => {
   res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${fileSize}`);
   res.setHeader('Content-Type', getContentType(file.name));
   res.setHeader('Accept-Ranges', 'bytes');
+
+  // 检查缓存
+  const cacheKey = `${infoHash}:${fileIndex}:${range.start}-${range.end}`;
+  const cachedData = streamCache.get(cacheKey);
   
-  // 创建指定范围的可读流
-  const stream = file.createReadStream({
-    start: range.start,
-    end: range.end
+  if (cachedData) {
+    res.end(cachedData);
+    return;
+  }
+  
+  // 创建带预加载的流
+  const stream = createStreamWithPreload(file, range, engine);
+  
+  // 收集数据以缓存
+  const chunks = [];
+  stream.on('data', (chunk) => {
+    chunks.push(chunk);
+  });
+  
+  stream.on('end', () => {
+    const data = Buffer.concat(chunks);
+    streamCache.set(cacheKey, data);
   });
   
   stream.pipe(res);
