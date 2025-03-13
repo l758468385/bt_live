@@ -1,0 +1,16 @@
+{
+  "name": "magnet-player",
+  "version": "1.0.0",
+  "description": "磁力链接在线播放器",
+  "scripts": {
+    "start": "node server/server.js",
+    "client": "cd client && npm run serve",
+    "server": "cd server && npm run dev",
+    "build": "cd client && npm run build",
+    "docker:build": "docker-compose build",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down"
+  },
+  "author": "",
+  "license": "MIT"
+} 

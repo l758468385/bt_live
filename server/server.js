@@ -325,6 +325,25 @@ app.delete('/api/cleanup-all', async (req, res) => {
   }
 });
 
+// 添加静态文件托管功能
+const CLIENT_BUILD_PATH = path.resolve(__dirname, '../client/dist');
+
+// 检查是否存在构建好的前端应用
+if (fs.existsSync(CLIENT_BUILD_PATH)) {
+  console.log('为前端应用提供静态文件服务...');
+  
+  // 为静态资源提供服务
+  app.use(express.static(CLIENT_BUILD_PATH));
+  
+  // 其他所有路由都返回index.html
+  app.get('*', (req, res) => {
+    // 排除API路由
+    if (!req.path.startsWith('/api/')) {
+      res.sendFile(path.join(CLIENT_BUILD_PATH, 'index.html'));
+    }
+  });
+}
+
 // 获取引擎进度
 function getProgress(engine) {
   const torrent = engine.torrent;

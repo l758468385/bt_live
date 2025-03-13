@@ -1,7 +1,10 @@
 import { createStore } from 'vuex'
 import axios from 'axios'
 
-const API_URL = 'http://localhost:3000/api'
+// 根据环境动态设置API URL
+const API_URL = process.env.NODE_ENV === 'production' 
+  ? '/api' // 生产环境使用相对路径
+  : 'http://localhost:3000/api' // 开发环境使用完整URL
 
 export default createStore({
   state: {

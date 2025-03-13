@@ -116,7 +116,11 @@ export default {
     ...mapGetters(['mediaFiles', 'formattedStatus']),
     videoUrl() {
       if (!this.currentFile || !this.torrentInfo) return ''
-      return `http://localhost:3000/api/stream/${this.torrentInfo.infoHash}/${this.currentFile.index}`
+      // 根据环境动态生成视频URL
+      const baseUrl = process.env.NODE_ENV === 'production' 
+        ? '' // 生产环境使用相对路径
+        : 'http://localhost:3000'
+      return `${baseUrl}/api/stream/${this.torrentInfo.infoHash}/${this.currentFile.index}`
     }
   },
   methods: {
@@ -165,9 +169,14 @@ export default {
     handleBeforeUnload() {
       // 清理当前种子的缓存
       if (this.torrentInfo && this.torrentInfo.infoHash) {
+        // 根据环境动态生成API URL
+        const baseUrl = process.env.NODE_ENV === 'production' 
+          ? '' // 生产环境使用相对路径
+          : 'http://localhost:3000'
+        
         // 使用同步方式发送请求
         const xhr = new XMLHttpRequest();
-        xhr.open('DELETE', `http://localhost:3000/api/cleanup/${this.torrentInfo.infoHash}`, false);
+        xhr.open('DELETE', `${baseUrl}/api/cleanup/${this.torrentInfo.infoHash}`, false);
         xhr.send();
       }
     }
