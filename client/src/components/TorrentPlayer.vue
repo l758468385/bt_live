@@ -56,18 +56,11 @@
           <h3>{{ currentFile.name }}</h3>
           <video 
             ref="videoPlayer"
+            class="video-js vjs-default-skin vjs-big-play-centered"
             controls 
-            autoplay
-            class="video-player"
             preload="auto"
             playsinline
-            @loadedmetadata="handleVideoLoaded"
-            @timeupdate="handleTimeUpdate"
-            @seeking="handleSeeking"
-            @seeked="handleSeeked"
-            @waiting="handleWaiting"
-            @playing="handlePlaying"
-            @error="handleError"
+            data-setup="{}"
           >
             <source :src="videoUrl" :type="currentFile ? getContentType(currentFile.name) : 'video/mp4'">
             您的浏览器不支持HTML5视频
@@ -130,6 +123,8 @@
 <script>
 import { mapState, mapGetters, mapActions } from 'vuex'
 import CacheManager from './CacheManager.vue'
+import videojs from 'video.js'
+import 'video.js/dist/video-js.css'
 
 export default {
   name: 'TorrentPlayer',
@@ -144,7 +139,8 @@ export default {
       buffering: false,
       bufferPercentage: 0,
       lastPlayPosition: 0,
-      seekTimeout: null
+      seekTimeout: null,
+      player: null
     }
   },
   computed: {
@@ -155,7 +151,12 @@ export default {
       const baseUrl = process.env.NODE_ENV === 'production' 
         ? '' 
         : 'http://localhost:3000'
-      return `${baseUrl}/api/stream/${this.torrentInfo.infoHash}/${this.currentFile.index}`
+      
+      // 添加随机参数避免缓存
+      const timestamp = Date.now()
+      const random = Math.random().toString(36).substring(7)
+      
+      return `${baseUrl}/api/stream/${this.torrentInfo.infoHash}/${this.currentFile.index}?t=${timestamp}&r=${random}`
     }
   },
   methods: {
@@ -167,8 +168,151 @@ export default {
       'cleanupCache',
       'cleanupAllCache'
     ]),
+    initVideoPlayer() {
+      if (this.player) {
+        this.player.dispose()
+      }
+
+      this.player = videojs(this.$refs.videoPlayer, {
+        controls: true,
+        autoplay: true,
+        preload: 'auto',
+        fluid: true,
+        playbackRates: [0.5, 1, 1.5, 2],
+        html5: {
+          nativeTextTracks: false,
+          nativeAudioTracks: false,
+          nativeVideoTracks: false
+        },
+        techOrder: ['html5'],
+        sources: [{
+          src: this.videoUrl,
+          type: this.currentFile ? this.getContentType(this.currentFile.name) : 'video/mp4'
+        }]
+      });
+
+      // 自定义流式加载
+      const tech = this.player.tech();
+      if (tech && tech.xhr) {
+        tech.xhr.beforeRequest = (options) => {
+          options.headers = {
+            'Range': `bytes=${options.range.start}-${options.range.end}`,
+            'Cache-Control': 'no-cache'
+          };
+        };
+      }
+
+      // 监听缓冲状态
+      this.player.on('progress', () => {
+        const buffered = this.player.buffered();
+        if (buffered.length > 0) {
+          const bufferEnd = buffered.end(buffered.length - 1);
+          const currentTime = this.player.currentTime();
+          this.bufferPercentage = (bufferEnd / this.player.duration()) * 100;
+          
+          if (bufferEnd - currentTime < 5) {
+            this.preloadMore();
+          }
+        }
+      });
+
+      // 监听播放状态
+      this.player.on('waiting', () => {
+        this.buffering = true;
+      });
+
+      this.player.on('playing', () => {
+        this.buffering = false;
+      });
+
+      // 监听错误
+      this.player.on('error', (error) => {
+        console.error('视频播放错误:', error);
+        this.handleError(error);
+      });
+
+      // 监听加载完成
+      this.player.on('loadedmetadata', () => {
+        this.handleVideoLoaded();
+      });
+
+      // 监听时间更新
+      this.player.on('timeupdate', () => {
+        this.handleTimeUpdate();
+      });
+
+      // 监听跳转
+      this.player.on('seeking', () => {
+        this.handleSeeking();
+      });
+
+      this.player.on('seeked', () => {
+        this.handleSeeked();
+      });
+    },
+    preloadMore() {
+      if (!this.currentFile || !this.torrentInfo) return;
+      
+      const currentTime = this.player.currentTime();
+      const duration = this.player.duration();
+      const preloadSize = 30; // 预加载30秒
+      
+      const range = {
+        start: currentTime,
+        end: Math.min(currentTime + preloadSize, duration)
+      };
+      
+      // 触发预加载
+      const tech = this.player.tech();
+      if (tech && tech.xhr) {
+        tech.xhr.beforeRequest({
+          range: range
+        });
+      }
+    },
+    handleVideoLoaded() {
+      if (this.player) {
+        // 设置初始缓冲大小
+        this.player.buffer = 2048;
+        // 设置播放速率
+        this.player.playbackRate(1.0);
+      }
+    },
+    handleTimeUpdate() {
+      if (this.player) {
+        this.lastPlayPosition = this.player.currentTime();
+      }
+    },
+    handleSeeking() {
+      if (this.seekTimeout) {
+        clearTimeout(this.seekTimeout);
+      }
+      this.buffering = true;
+    },
+    handleSeeked() {
+      this.buffering = false;
+      this.seekTimeout = setTimeout(() => {
+        if (this.lastPlayPosition === this.player.currentTime()) {
+          this.handleError(new Error('播放卡住'));
+        }
+      }, 5000);
+    },
+    handleError(error) {
+      console.error('视频播放错误:', error);
+      this.buffering = false;
+      if (this.player) {
+        this.player.load();
+        this.player.play().catch(console.error);
+      }
+    },
+    changeQuality() {
+      if (this.player) {
+        this.player.load();
+        this.player.play().catch(console.error);
+      }
+    },
     getContentType(filename) {
-      const ext = filename.split('.').pop().toLowerCase()
+      const ext = filename.split('.').pop().toLowerCase();
       const types = {
         'mp4': 'video/mp4',
         'mkv': 'video/x-matroska',
@@ -179,102 +323,46 @@ export default {
         'webm': 'video/webm',
         'mpg': 'video/mpeg',
         'mpeg': 'video/mpeg'
-      }
-      return types[ext] || 'video/mp4'
-    },
-    handleVideoLoaded() {
-      const video = this.$refs.videoPlayer
-      if (video) {
-        // 设置初始缓冲大小
-        video.buffer = 2048
-        // 设置播放速率
-        video.playbackRate = 1.0
-      }
-    },
-    handleTimeUpdate() {
-      const video = this.$refs.videoPlayer
-      if (video) {
-        this.lastPlayPosition = video.currentTime
-        // 更新缓冲进度
-        if (video.buffered.length > 0) {
-          const bufferedEnd = video.buffered.end(video.buffered.length - 1)
-          this.bufferPercentage = (bufferedEnd / video.duration) * 100
-        }
-      }
-    },
-    handleSeeking() {
-      // 清除之前的超时
-      if (this.seekTimeout) {
-        clearTimeout(this.seekTimeout)
-      }
-      this.buffering = true
-    },
-    handleSeeked() {
-      this.buffering = false
-      // 设置新的超时
-      this.seekTimeout = setTimeout(() => {
-        if (this.lastPlayPosition === this.$refs.videoPlayer.currentTime) {
-          // 如果位置没有变化，可能是卡住了
-          this.handleError(new Error('播放卡住'))
-        }
-      }, 5000)
-    },
-    handleWaiting() {
-      this.buffering = true
-    },
-    handlePlaying() {
-      this.buffering = false
-    },
-    handleError(error) {
-      console.error('视频播放错误:', error)
-      this.buffering = false
-      // 尝试重新加载视频
-      const video = this.$refs.videoPlayer
-      if (video) {
-        video.load()
-        video.play().catch(console.error)
-      }
-    },
-    changeQuality() {
-      // 实现清晰度切换逻辑
-      const video = this.$refs.videoPlayer
-      if (video) {
-        video.load()
-        video.play().catch(console.error)
-      }
+      };
+      return types[ext] || 'video/mp4';
     },
     async loadTorrent() {
-      if (!this.magnetLink || this.loading) return
+      if (!this.magnetLink || this.loading) return;
       
       try {
-        await this.getTorrentInfo(this.magnetLink)
-        // 如果只有一个媒体文件，自动播放
+        await this.getTorrentInfo(this.magnetLink);
         if (this.mediaFiles.length === 1) {
-          this.playFile(this.mediaFiles[0].index)
+          this.playFile(this.mediaFiles[0].index);
         }
       } catch (error) {
-        console.error('加载种子失败', error)
+        console.error('加载种子失败', error);
       }
     },
     playFile(fileIndex) {
-      this.selectFile(fileIndex)
+      this.selectFile(fileIndex);
+      this.$nextTick(() => {
+        this.initVideoPlayer();
+      });
     },
     formatFileSize(bytes) {
-      if (bytes === 0) return '0 B'
+      if (bytes === 0) return '0 B';
       
-      const k = 1024
-      const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
-      const i = Math.floor(Math.log(bytes) / Math.log(k))
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
       
-      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     },
     async clearAll() {
-      // 清理当前种子的缓存
       if (this.torrentInfo && this.torrentInfo.infoHash) {
         await this.cleanupCache();
       }
       this.clearTorrent();
       this.magnetLink = '';
+      if (this.player) {
+        this.player.dispose();
+        this.player = null;
+      }
     },
     // 添加页面关闭前的处理方法
     handleBeforeUnload() {
@@ -302,6 +390,10 @@ export default {
     }
     if (this.seekTimeout) {
       clearTimeout(this.seekTimeout)
+    }
+    if (this.player) {
+      this.player.dispose();
+      this.player = null;
     }
   },
   mounted() {
@@ -494,11 +586,41 @@ input:focus {
   word-break: break-all;
 }
 
-.video-player {
+.video-js {
   width: 100%;
+  height: 400px;
   background-color: black;
   border-radius: 4px;
-  max-height: 400px;
+}
+
+.video-js .vjs-tech {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.video-js .vjs-big-play-button {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.video-js .vjs-control-bar {
+  background-color: rgba(0, 0, 0, 0.7);
+}
+
+.video-js .vjs-slider {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+
+.video-js .vjs-play-progress {
+  background-color: #1e88e5;
+}
+
+.video-js .vjs-volume-level {
+  background-color: #1e88e5;
 }
 
 .status-panel {

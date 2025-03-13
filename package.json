@@ -12,5 +12,10 @@
     "docker:down": "docker-compose down"
   },
   "author": "",
-  "license": "MIT"
-} 
+  "license": "MIT",
+  "dependencies": {
+    "video.js": "^8.22.0",
+    "videojs-contrib-hls": "^5.15.0",
+    "videojs-contrib-quality-levels": "^4.1.0"
+  }
+}
