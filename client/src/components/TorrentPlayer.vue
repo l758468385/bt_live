@@ -55,35 +55,65 @@
         <div class="player-container" v-if="currentFile">
           <h3>{{ currentFile.name }}</h3>
           <video 
+            ref="videoPlayer"
             controls 
             autoplay
             class="video-player"
+            preload="auto"
+            playsinline
+            @loadedmetadata="handleVideoLoaded"
+            @timeupdate="handleTimeUpdate"
+            @seeking="handleSeeking"
+            @seeked="handleSeeked"
+            @waiting="handleWaiting"
+            @playing="handlePlaying"
+            @error="handleError"
           >
-            <source :src="videoUrl" type="video/mp4">
+            <source :src="videoUrl" :type="currentFile ? getContentType(currentFile.name) : 'video/mp4'">
             您的浏览器不支持HTML5视频
           </video>
 
+          <!-- 播放控制面板 -->
+          <div class="player-controls">
+            <div class="quality-selector" v-if="availableQualities.length > 1">
+              <select v-model="currentQuality" @change="changeQuality">
+                <option v-for="quality in availableQualities" :key="quality" :value="quality">
+                  {{ quality }}p
+                </option>
+              </select>
+            </div>
+            <div class="buffer-status" v-if="buffering">
+              <div class="spinner small"></div>
+              <span>缓冲中...</span>
+            </div>
+          </div>
+
           <!-- 下载状态 -->
           <div class="status-panel" v-if="formattedStatus">
-            <div class="status-item">
-              <span>下载速度:</span>
-              <strong>{{ formattedStatus.downloadSpeedFormatted }}</strong>
-            </div>
-            <div class="status-item">
-              <span>上传速度:</span>
-              <strong>{{ formattedStatus.uploadSpeedFormatted }}</strong>
-            </div>
-            <div class="status-item">
-              <span>已下载:</span>
-              <strong>{{ formattedStatus.downloadedFormatted }}</strong>
-            </div>
-            <div class="status-item">
-              <span>连接节点:</span>
-              <strong>{{ formattedStatus.peers }}</strong>
+            <div class="status-grid">
+              <div class="status-item">
+                <span>下载速度:</span>
+                <strong>{{ formattedStatus.downloadSpeedFormatted }}</strong>
+              </div>
+              <div class="status-item">
+                <span>上传速度:</span>
+                <strong>{{ formattedStatus.uploadSpeedFormatted }}</strong>
+              </div>
+              <div class="status-item">
+                <span>已下载:</span>
+                <strong>{{ formattedStatus.downloadedFormatted }}</strong>
+              </div>
+              <div class="status-item">
+                <span>连接节点:</span>
+                <strong>{{ formattedStatus.peers }}</strong>
+              </div>
             </div>
             <div class="progress-bar">
               <div class="progress" :style="{ width: formattedStatus.progressPercentage + '%' }"></div>
               <span class="progress-text">{{ formattedStatus.progressPercentage }}%</span>
+            </div>
+            <div class="buffer-bar">
+              <div class="buffer-progress" :style="{ width: bufferPercentage + '%' }"></div>
             </div>
           </div>
         </div>
@@ -108,7 +138,13 @@ export default {
   },
   data() {
     return {
-      magnetLink: ''
+      magnetLink: '',
+      currentQuality: 'auto',
+      availableQualities: ['auto'],
+      buffering: false,
+      bufferPercentage: 0,
+      lastPlayPosition: 0,
+      seekTimeout: null
     }
   },
   computed: {
@@ -116,9 +152,8 @@ export default {
     ...mapGetters(['mediaFiles', 'formattedStatus']),
     videoUrl() {
       if (!this.currentFile || !this.torrentInfo) return ''
-      // 根据环境动态生成视频URL
       const baseUrl = process.env.NODE_ENV === 'production' 
-        ? '' // 生产环境使用相对路径
+        ? '' 
         : 'http://localhost:3000'
       return `${baseUrl}/api/stream/${this.torrentInfo.infoHash}/${this.currentFile.index}`
     }
@@ -132,6 +167,82 @@ export default {
       'cleanupCache',
       'cleanupAllCache'
     ]),
+    getContentType(filename) {
+      const ext = filename.split('.').pop().toLowerCase()
+      const types = {
+        'mp4': 'video/mp4',
+        'mkv': 'video/x-matroska',
+        'avi': 'video/x-msvideo',
+        'mov': 'video/quicktime',
+        'wmv': 'video/x-ms-wmv',
+        'flv': 'video/x-flv',
+        'webm': 'video/webm',
+        'mpg': 'video/mpeg',
+        'mpeg': 'video/mpeg'
+      }
+      return types[ext] || 'video/mp4'
+    },
+    handleVideoLoaded() {
+      const video = this.$refs.videoPlayer
+      if (video) {
+        // 设置初始缓冲大小
+        video.buffer = 2048
+        // 设置播放速率
+        video.playbackRate = 1.0
+      }
+    },
+    handleTimeUpdate() {
+      const video = this.$refs.videoPlayer
+      if (video) {
+        this.lastPlayPosition = video.currentTime
+        // 更新缓冲进度
+        if (video.buffered.length > 0) {
+          const bufferedEnd = video.buffered.end(video.buffered.length - 1)
+          this.bufferPercentage = (bufferedEnd / video.duration) * 100
+        }
+      }
+    },
+    handleSeeking() {
+      // 清除之前的超时
+      if (this.seekTimeout) {
+        clearTimeout(this.seekTimeout)
+      }
+      this.buffering = true
+    },
+    handleSeeked() {
+      this.buffering = false
+      // 设置新的超时
+      this.seekTimeout = setTimeout(() => {
+        if (this.lastPlayPosition === this.$refs.videoPlayer.currentTime) {
+          // 如果位置没有变化，可能是卡住了
+          this.handleError(new Error('播放卡住'))
+        }
+      }, 5000)
+    },
+    handleWaiting() {
+      this.buffering = true
+    },
+    handlePlaying() {
+      this.buffering = false
+    },
+    handleError(error) {
+      console.error('视频播放错误:', error)
+      this.buffering = false
+      // 尝试重新加载视频
+      const video = this.$refs.videoPlayer
+      if (video) {
+        video.load()
+        video.play().catch(console.error)
+      }
+    },
+    changeQuality() {
+      // 实现清晰度切换逻辑
+      const video = this.$refs.videoPlayer
+      if (video) {
+        video.load()
+        video.play().catch(console.error)
+      }
+    },
     async loadTorrent() {
       if (!this.magnetLink || this.loading) return
       
@@ -188,6 +299,9 @@ export default {
     // 组件销毁前清理缓存
     if (this.torrentInfo && this.torrentInfo.infoHash) {
       this.cleanupCache();
+    }
+    if (this.seekTimeout) {
+      clearTimeout(this.seekTimeout)
     }
   },
   mounted() {
@@ -427,6 +541,57 @@ input:focus {
   color: white;
   font-weight: bold;
   text-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+}
+
+.player-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background-color: #f5f5f5;
+  border-radius: 4px;
+}
+
+.quality-selector select {
+  padding: 4px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  background-color: white;
+}
+
+.buffer-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #666;
+}
+
+.spinner.small {
+  width: 16px;
+  height: 16px;
+  border-width: 2px;
+}
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.buffer-bar {
+  height: 4px;
+  background-color: #e0e0e0;
+  border-radius: 2px;
+  margin-top: 0.5rem;
+  overflow: hidden;
+}
+
+.buffer-progress {
+  height: 100%;
+  background-color: #4caf50;
+  transition: width 0.3s ease;
 }
 
 @media (max-width: 768px) {
