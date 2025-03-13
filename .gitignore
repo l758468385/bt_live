@@ -1,1 +1,11 @@
 node_modules
+
+# 屏蔽server 下的 cache 文件夹
+server/cache
+
+.idea
+
+.vscode
+
+.DS_Store
+
