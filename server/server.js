@@ -90,7 +90,20 @@ function getEngine(magnetLink) {
       tmp: CACHE_DIR,
       path: path.join(CACHE_DIR, infoHash),
       connections: 100,
-      uploads: 10
+      uploads: 10,
+      trackers: [
+        'udp://tracker.opentrackr.org:1337/announce',
+        'udp://tracker.openbittorrent.com:6969/announce',
+        'udp://open.stealth.si:80/announce',
+        'udp://tracker.torrent.eu.org:451/announce',
+        'udp://tracker.moeking.me:6969/announce',
+        'udp://exodus.desync.com:6969/announce',
+        'udp://explodie.org:6969/announce',
+        'udp://tracker.tiny-vps.com:6969/announce',
+        'udp://tracker.theoks.net:6969/announce',
+        'udp://tracker.bittor.pw:1337/announce',
+        'udp://tracker.dler.org:6969/announce'
+      ]
     });
     
     // 设置自动清理定时器 (30分钟)
