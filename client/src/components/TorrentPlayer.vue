@@ -91,14 +91,21 @@
 
       <button @click="clearAll" class="secondary-btn">清除当前种子</button>
     </div>
+    
+    <!-- 添加缓存管理组件 -->
+    <cache-manager />
   </div>
 </template>
 
 <script>
 import { mapState, mapGetters, mapActions } from 'vuex'
+import CacheManager from './CacheManager.vue'
 
 export default {
   name: 'TorrentPlayer',
+  components: {
+    CacheManager
+  },
   data() {
     return {
       magnetLink: ''
@@ -113,7 +120,14 @@ export default {
     }
   },
   methods: {
-    ...mapActions(['getTorrentInfo', 'selectFile', 'clearTorrent', 'stopStatusPolling']),
+    ...mapActions([
+      'getTorrentInfo', 
+      'selectFile', 
+      'clearTorrent', 
+      'stopStatusPolling',
+      'cleanupCache',
+      'cleanupAllCache'
+    ]),
     async loadTorrent() {
       if (!this.magnetLink || this.loading) return
       
@@ -139,14 +153,41 @@ export default {
       
       return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
     },
-    clearAll() {
-      this.clearTorrent()
-      this.magnetLink = ''
+    async clearAll() {
+      // 清理当前种子的缓存
+      if (this.torrentInfo && this.torrentInfo.infoHash) {
+        await this.cleanupCache();
+      }
+      this.clearTorrent();
+      this.magnetLink = '';
+    },
+    // 添加页面关闭前的处理方法
+    handleBeforeUnload() {
+      // 清理当前种子的缓存
+      if (this.torrentInfo && this.torrentInfo.infoHash) {
+        // 使用同步方式发送请求
+        const xhr = new XMLHttpRequest();
+        xhr.open('DELETE', `http://localhost:3000/api/cleanup/${this.torrentInfo.infoHash}`, false);
+        xhr.send();
+      }
     }
   },
   beforeUnmount() {
     // 组件销毁前停止状态轮询
-    this.stopStatusPolling()
+    this.stopStatusPolling();
+    
+    // 组件销毁前清理缓存
+    if (this.torrentInfo && this.torrentInfo.infoHash) {
+      this.cleanupCache();
+    }
+  },
+  mounted() {
+    // 添加页面关闭前的事件监听
+    window.addEventListener('beforeunload', this.handleBeforeUnload);
+  },
+  unmounted() {
+    // 移除页面关闭前的事件监听
+    window.removeEventListener('beforeunload', this.handleBeforeUnload);
   }
 }
 </script>

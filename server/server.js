@@ -20,6 +20,53 @@ app.use(cors());
 // 活动引擎映射表
 const activeEngines = {};
 
+// 设置定时清理任务 - 每天清理一次
+const CACHE_CLEANUP_INTERVAL = 24 * 60 * 60 * 1000; // 24小时
+setInterval(cleanupAllCache, CACHE_CLEANUP_INTERVAL);
+
+// 清理所有缓存的函数
+async function cleanupAllCache() {
+  try {
+    console.log('执行定时缓存清理...');
+    
+    // 获取所有活动引擎的hashID
+    const activeEngineHashes = Object.keys(activeEngines);
+    
+    // 读取缓存目录
+    if (fs.existsSync(CACHE_DIR)) {
+      const cacheDirs = fs.readdirSync(CACHE_DIR);
+      
+      // 查找超过1天未被访问的缓存目录
+      const now = Date.now();
+      for (const dir of cacheDirs) {
+        // 跳过活动引擎的缓存目录
+        if (activeEngineHashes.includes(dir.toLowerCase())) {
+          continue;
+        }
+        
+        const fullPath = path.join(CACHE_DIR, dir);
+        if (fs.statSync(fullPath).isDirectory()) {
+          // 获取目录的最后访问时间
+          const stats = fs.statSync(fullPath);
+          const lastAccessTime = stats.atime.getTime();
+          
+          // 如果超过1天未访问，则删除
+          if (now - lastAccessTime > 24 * 60 * 60 * 1000) {
+            try {
+              fs.rmSync(fullPath, { recursive: true, force: true });
+              console.log(`已清理过期缓存: ${dir}`);
+            } catch (err) {
+              console.error(`清理过期缓存失败 ${dir}:`, err);
+            }
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error('定时清理缓存失败:', error);
+  }
+}
+
 // 清理引擎的函数
 function cleanupEngine(infoHash) {
   if (activeEngines[infoHash]) {
@@ -200,6 +247,82 @@ app.get('/api/status/:infoHash', (req, res) => {
   };
   
   res.json(status);
+});
+
+// 清理种子缓存
+app.delete('/api/cleanup/:infoHash', async (req, res) => {
+  const { infoHash } = req.params;
+  
+  try {
+    // 先销毁引擎
+    if (activeEngines[infoHash]) {
+      await new Promise((resolve) => {
+        activeEngines[infoHash].destroy(() => {
+          delete activeEngines[infoHash];
+          resolve();
+        });
+      });
+    }
+    
+    // 删除缓存目录
+    const torrentCacheDir = path.join(CACHE_DIR, infoHash);
+    if (fs.existsSync(torrentCacheDir)) {
+      try {
+        // 递归删除目录及其内容
+        fs.rmSync(torrentCacheDir, { recursive: true, force: true });
+        console.log(`已清理缓存: ${infoHash}`);
+      } catch (err) {
+        console.error(`清理缓存失败 ${infoHash}:`, err);
+      }
+    }
+    
+    res.json({ success: true, message: `已清理缓存: ${infoHash}` });
+  } catch (error) {
+    console.error('清理失败:', error);
+    res.status(500).json({ success: false, error: '清理缓存时出错' });
+  }
+});
+
+// 清理所有缓存
+app.delete('/api/cleanup-all', async (req, res) => {
+  try {
+    // 销毁所有活动引擎
+    const engineHashes = Object.keys(activeEngines);
+    
+    // 逐个销毁引擎
+    for (const hash of engineHashes) {
+      await new Promise((resolve) => {
+        activeEngines[hash].destroy(() => {
+          delete activeEngines[hash];
+          resolve();
+        });
+      });
+    }
+    
+    // 清空缓存目录
+    if (fs.existsSync(CACHE_DIR)) {
+      // 读取所有缓存目录
+      const cacheDirs = fs.readdirSync(CACHE_DIR);
+      
+      // 逐个删除目录
+      for (const dir of cacheDirs) {
+        const fullPath = path.join(CACHE_DIR, dir);
+        if (fs.statSync(fullPath).isDirectory()) {
+          try {
+            fs.rmSync(fullPath, { recursive: true, force: true });
+          } catch (err) {
+            console.error(`清理缓存目录失败 ${dir}:`, err);
+          }
+        }
+      }
+    }
+    
+    console.log('已清理所有缓存');
+    res.json({ success: true, message: '已清理所有缓存' });
+  } catch (error) {
+    console.error('清理所有缓存失败:', error);
+    res.status(500).json({ success: false, error: '清理所有缓存时出错' });
+  }
 });
 
 // 获取引擎进度

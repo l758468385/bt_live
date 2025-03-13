@@ -115,6 +115,24 @@ export default createStore({
       commit('SET_TORRENT_INFO', null)
       commit('SET_CURRENT_FILE', null)
       commit('SET_STREAM_STATUS', null)
+    },
+    async cleanupCache({ state }) {
+      if (!state.torrentInfo || !state.torrentInfo.infoHash) return
+      
+      try {
+        await axios.delete(`${API_URL}/cleanup/${state.torrentInfo.infoHash}`)
+        console.log('缓存已清理')
+      } catch (error) {
+        console.error('清理缓存失败:', error)
+      }
+    },
+    async cleanupAllCache() {
+      try {
+        await axios.delete(`${API_URL}/cleanup-all`)
+        console.log('所有缓存已清理')
+      } catch (error) {
+        console.error('清理所有缓存失败:', error)
+      }
     }
   }
 })
